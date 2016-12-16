@@ -19,6 +19,9 @@ class radexgrid:
         self.mu = self.read_molecular_weight()
         self.parse_filename()
         self.fwhm = 2. * np.sqrt(np.log(2) * 2)
+        
+        self.gridranges = [self.vals[i*3+1] - self.vals[i*3] for i in range(4)]
+        
         return
 
     def parse_filename(self):
@@ -72,17 +75,9 @@ class radexgrid:
         """Simple Gaussian function, width is Doppler-b."""
         return a * np.exp(-0.5 * np.power((x - b) / c, 2))
 
-    def get_spectra(self, j, vals, velax, attenuate=False):
+    def get_spectra(self, j, vals, velax):
         """Single Gaussian spectrum."""
-        #TODO: Remove attenuate if possible.
-        peak_intensity = self.interpolate_intensity(j, vals)
-        line_center = 0.0
-        linewidth = self.total_linewidth(vals)
-        line = self.gaussian(velax, peak_intensity, line_center, linewidth)
-        if attenuate:
-            return line * (1. - self.get_tau(j, vals, velax))
-        else:   
-            return line
+        return self.gaussian(velax, self.interpolate_intensity(j, vals), 0.0, vals[0])
             
     def get_tau(self, j, t, velax):
         """Returns the (Gaussian) optical depth profile for the slab. """

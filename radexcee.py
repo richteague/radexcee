@@ -1,18 +1,29 @@
+import emcee
 import numpy as np
 from radexgridclass import radexgrid
 from extractspectra import spectrum
 import scipy.constants as sc
 
 class radexcee:
+    """
+    Class to run emcee sampling of fitting multiple lines.
+    """
     
-    def __init__(self, obsdict, grid_path):
-        """Initialise."""
+    def __init__(self, obsdict, grid_path, **kwargs):
+        
+        # Provided
         self.parse_to_dictionaries(obsdict)     
         self.grid = radexgrid(grid_path)       
+        
+        # Defaults
+        self.maxrange = kwargs.get('maxrange', 2.0)
+        self.nslabs = kwargs.get('nslabs', 5)
         return
     
     def parse_to_dictionaries(self, obsdict):
-        """Splits the provided dictionary into several dictionaries."""
+        """
+        Splits the provided dictionary into several dictionaries.
+        """
         self.trans = sorted(obsdict.keys())
         self.ntrans = len(self.trans)
         self.velaxes = {j : obsdict[j]['velax'] for j in self.trans}
@@ -22,108 +33,105 @@ class radexcee:
         self.fluxcal = {j : obsdict[j]['fluxcal'] for j in self.trans}
         return
     
-    def lnpriors(self, theta, gradients):
-        """Log-prior function."""
-        
-        # Consider only the mean values first.
-        # The RADEX grid requires the FWHM of the line. The free
-        # parameter is the non-thermal width (Doppler-b) of the line.
-        # For extra parameters, clip temperatures to the grid values.
-
-        if theta[0] < 0:
-            return -np.inf
-        else:
-            fwhm = self.grid.total_linewidth(theta)
-        
-        temp = theta[1]
-        dens = theta[2]
-        colu = theta[3]
-        
-        for i, p in enumerate([fwhm, temp, dens, colu]):
-            if not (self.grid.vals[i*3] <= p <= self.grid.vals[i*3+1]):
+    def lnpriors(self, theta):
+        """
+        Log-prior function. First four parameters should lie in the RADEX
+        grid. The last three should be less than self.maxrange.
+        """
+        for i in range(4):
+            if not (self.grid.vals[i*3] <= theta[i] <= self.grid.vals[i*3+1]):
                 return -np.inf
-        
-        # If appropriate, check to make sure that all the gradients
-        # are both positive and less than the specified limit.
-        if len(theta) > 4:
-            toiter = zip(self.pgradients(theta, gradients), gradients)
-            if not all([0 <= g <= gmax for g, gmax in toiter]):
+        for i in range(4,7):
+            if not (0. <= theta[i] <= self.maxrange):
                 return -np.inf
-        
         return 0.0
 
-
-    def lnprob(self, theta, gradients=[0, 0, 0], nslabs=5):
-        """Log-probability function."""  
+    def combine_theta(self, theta, g):
+        """
+        Parses theta using gradients.
+        """
+        t = [tt for tt in theta[:4]]
+        t = t + [theta[4+sum(g[:i])] if g[i] else 0 for i in range(len(g))]
+        return t
         
-        # Number of slabs.
-        self.nslabs = nslabs
+    def lnprob(self, theta, gradients):
+        """
+        Log-probability function.
+        """  
         
-        # Priors.
-        lp = self.lnpriors(theta, gradients)
+        # Update theta. Includes the gradients in the end
+        # and includes the first as the total FWHM of the line.
+        theta = self.combine_theta(theta, gradients)
+        if theta[0] >= 0:
+            theta[0] = self.grid.total_linewidth(theta)
+        else:
+            return -np.inf 
+                
+        # Log-Priors.
+        lp = self.lnpriors(theta)
         if not np.isfinite(lp):
             return -np.inf
         
-        # Likelihood.
-        return lp + self.lnlike(theta, gradients)
+        # Log-Likelihood.
+        return lp + self.lnlike(theta)
 
         
-    def lnlike(self, theta, gradients):
-        """Log-likelihood function."""
-        
-        # Each model is the summation of homogeneous slab models.               
-        models = [self.calc_models(j, theta, gradients) for j in self.trans]
-
-        # Use Chi-square as the distance metric.
-        ll = [self.lnchi2(model, self.lines[j], self.rms[j], self.fluxcal[j]) 
-              for model, j in zip(models, self.trans)]
+    def lnlike(self, theta):
+        """
+        Log-likelihood function.
+        Each model is the summation of homogeneous slab models.
+        Use Chi-square as the distance metric.
+        """         
+        models = {j : self.calc_models(j, theta) for j in self.trans}
+        ll = [self.lnchi2(models[j], self.lines[j], self.rms[j], 
+                          self.fluxcal[j]) for j in self.trans]
         return np.nansum(ll)
 
         
     def lnchi2(self, model, observation, rms, fluxcal):
-        """Returns the log-chi_squared value."""
+        """
+        Returns the log-chi_squared value.
+        """
         unc = np.hypot(rms, model * fluxcal)        
         lnx2 = ((observation - model) / unc)**2
         lnx2 -= 0.5 * np.log(2. * np.pi * unc**2)
         return -0.5 * np.sum(lnx2)
 
-
-    def pgradients(self, theta, gradients):
-        """Returns the gradients in the physical parameters."""
-        if len(theta) == 4:
-            return [0. for i in range(len(gradients))]
-        g = [int(gg != 0) for gg in gradients]
-        return [theta[4+sum(g[:i])] if g[i] else 0. for i in range(len(g))]
-
-
-    def calc_models(self, j, theta, gradients):
-        """Build a spectra from several slab models."""
+    def calc_models(self, j, theta):
+        """
+        Build a spectra from several slab models.
+        """
         
-        # Calculate the parameters for each slab model.
-        ranges = self.pgradients(theta, gradients)
-        params = zip(self.param_gradient(theta[0], ranges[0]), 
-                     self.param_gradient(theta[1], ranges[1]),
-                     self.param_gradient(theta[2], ranges[2]),
+        # Gradients in properties.
+        params = zip(self.param_gradient(theta[0], theta[4]), 
+                     self.param_gradient(theta[1], theta[5]),
+                     self.param_gradient(theta[2], theta[6]),
                      self.slab_columns(theta[3]))       
         
         # Combine slabs.
         mods = [self.grid.get_spectra(j, p, self.velaxes[j]) for p in params]
         mods = np.sum(mods, axis=0)
         
-        # Include flux calibration.
+        # Flux calibration.
         scale = 1. + np.random.randn() * self.fluxcal[j]
         return abs(scale) * mods
 
 
     def param_gradient(self, pmean, prange):
-        """Gradient in the parameters."""
-        pmin = (1. - prange * 0.5)
-        pmax = (1. + prange * 0.5)
+        """
+        Gradient in the parameters.
+        Limit the minimum value to zero.
+        """
+        pmin = (1. - prange)
+        pmin = max(0, pmin)
+        pmax = (1. + prange)
         return pmean * np.linspace(pmin, pmax, self.nslabs)
 
 
     def slab_columns(self, logcolumn):
-        """Returns column density of a slab."""
+        """
+        Returns column density of a slab.
+        """
         c = np.log10(np.power(10, logcolumn) / self.nslabs)
         return [c for n in np.arange(self.nslabs)]
 
@@ -140,4 +148,64 @@ class radexcee:
             else:
                 raise ValueError('Mismatch in lengths of iterables.')
         return [inp for i in range(self.ntrans)]
+        
+        
+    def run_sampler(self, nwalkers, nburnin, nsamples, 
+                          gradients=[False, False, False]):
+        """
+        Call emcee to run on the models with specified parameters.
+        gradients specifies if there's a gradient in that parameter or not.
+        """
+        
+        # Number of dimensions.
+        ndim = int(4 + sum(gradients))
+        
+        # Starting positions.
+        pos = np.array([np.random.random_sample(ndim) 
+                        for w in range(nwalkers)])
+        pos[:,0] *= 1e3
+        for d in range(4):
+            pos[:, d] *= self.grid.gridranges[d]
+            pos[:, d] += self.grid.vals[3*d]
+        for d in range(ndim-4, ndim):
+            pos[:, d] = abs(pos[:, d])
+            
+        # Run the sampler.
+        sampler = emcee.EnsembleSampler(nwalkers, 
+                                        ndim, 
+                                        self.lnprob, 
+                                        args=[gradients])
+        
+        # Use a double burn-in setup. First burn-in uses all
+        # parameters available for the sampler. The second uses
+        # the median values from the former. This should remove
+        # cases of walkers getting stuck in poor regions of parameter
+        # space.
+        _, _, _ = sampler.run_mcmc(pos, nburnin*0.5)
+        initial = sampler.chain.reshape((-1, ndim))
+        sampler.reset()
+        
+        # Resample the points and second burn-in.
+        p0 = self.samples_median(initial)
+        pos = [p0 + 1e-4*np.random.randn(ndim) for i in range(nwalkers)]     
+        _, _, _ = sampler.run_mcmc(pos, nburnin+nsamples)   
+        samples = sampler.chain[:,nburnin:,:].reshape((-1, ndim))
+        return sampler, samples
+        
+        
+    def samples_median(self, samples):
+        """
+        Returns the median of each dimension.
+        """
+        return [np.median(s) for s in samples.T]
+
+    def sample_percentiles(sampler, nburnin=0):
+        """
+        Returns the 16th, 50th and 84th percentiles for each dimension.
+        """
+        ndim = sampler.chain.shape[-1]
+        samples = sampler.chain[:, nburnin:, :].reshape((-1, ndim))
+        pcnts = [np.percentile(s, [16,50,84]) for s in samples.T]
+        return np.array([[p[1], p[1]-p[0], p[2]-p[1]] for p in pcnts])
+        
  
