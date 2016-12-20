@@ -9,6 +9,14 @@ class radexcee:
     Class to run emcee sampling of fitting multiple lines.
     """
     
+    labels = [r'$\Delta V_{\rm turb}$', 
+              r'$T_{\rm kin}$', 
+              r'$\log_{10} \, n({\rm H_2})$', 
+              r'$\log_{10}\,{\rm N(CO)}$',
+              r'$\delta \Delta V_{\rm turb}$',
+              r'$\delta T_{\rm kin}$',
+              r'$\delta \log_{10} \, n({\rm H_2})$']
+    
     def __init__(self, obsdict, grid_path, **kwargs):
         
         # Provided
@@ -92,7 +100,8 @@ class radexcee:
         """
         Returns the log-chi_squared value.
         """
-        unc = np.hypot(rms, model * fluxcal)        
+        unc = np.hypot(rms, model.max() * fluxcal)
+        unc *= 5.  
         lnx2 = ((observation - model) / unc)**2
         lnx2 -= 0.5 * np.log(2. * np.pi * unc**2)
         return -0.5 * np.sum(lnx2)
@@ -113,8 +122,8 @@ class radexcee:
         mods = np.sum(mods, axis=0)
         
         # Flux calibration.
-        scale = 1. + np.random.randn() * self.fluxcal[j]
-        return abs(scale) * mods
+        scale = abs(1. + np.random.randn() * self.fluxcal[j])
+        return scale * mods
 
 
     def param_gradient(self, pmean, prange):
@@ -181,14 +190,14 @@ class radexcee:
         # the median values from the former. This should remove
         # cases of walkers getting stuck in poor regions of parameter
         # space.
-        _, _, _ = sampler.run_mcmc(pos, nburnin*0.5)
+        _, _, _ = sampler.run_mcmc(pos, int(nburnin*0.5))
         initial = sampler.chain.reshape((-1, ndim))
         sampler.reset()
         
         # Resample the points and second burn-in.
         p0 = self.samples_median(initial)
         pos = [p0 + 1e-4*np.random.randn(ndim) for i in range(nwalkers)]     
-        _, _, _ = sampler.run_mcmc(pos, nburnin+nsamples)   
+        _, _, _ = sampler.run_mcmc(pos, int(nburnin+nsamples))   
         samples = sampler.chain[:,nburnin:,:].reshape((-1, ndim))
         return sampler, samples
         
@@ -199,13 +208,7 @@ class radexcee:
         """
         return [np.median(s) for s in samples.T]
 
-    def sample_percentiles(sampler, nburnin=0):
-        """
-        Returns the 16th, 50th and 84th percentiles for each dimension.
-        """
-        ndim = sampler.chain.shape[-1]
-        samples = sampler.chain[:, nburnin:, :].reshape((-1, ndim))
-        pcnts = [np.percentile(s, [16,50,84]) for s in samples.T]
-        return np.array([[p[1], p[1]-p[0], p[2]-p[1]] for p in pcnts])
+
+
         
  

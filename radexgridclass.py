@@ -95,7 +95,7 @@ class radexgrid:
     
     def thermal_linewidth(self, vals):
         """Returns the thermal Doppler-b linewidth."""
-        return np.sqrt(2. * sc.k * vals[1] / self.mu / sc.m_p)
+        return np.sqrt(2. * sc.k * abs(vals[1]) / self.mu / sc.m_p)
         
     # Additional functions.
 
