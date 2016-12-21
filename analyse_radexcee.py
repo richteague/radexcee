@@ -175,8 +175,12 @@ def random_pixels(cube, npix, **kwargs):
         else:
             pxls = np.vstack([pxls, [y, x]])
             check = True
-            
-    return pxls[1:]
+
+    # Return also the (r,t) position of each pixel.
+    # r in [arcsec] and t in [rad].
+    coords = np.array([[cube.rvals[y, x], cube.tvals[y, x]] for y, x in pxls[1:]])
+
+    return pxls[1:], coords
 
 def samples_median(samples):
     """
