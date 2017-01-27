@@ -1,11 +1,11 @@
-""" 
+"""
 Script to generate a grid of brightness temperatures from RADEX for a
-specified slab model. Can either be called from the command line or 
+specified slab model. Can either be called from the command line or
 externally as a function.
 
 Timing seems to scale linearly.
-1e2 entries: 00:01 
-1e3 entries: 00:19 
+1e2 entries: 00:01
+1e3 entries: 00:19
 1e4 entries: 03:23
 1e5 entries: 32:43
 """
@@ -21,41 +21,42 @@ from makeLime import lamdaclass
 import warnings
 warnings.filterwarnings("ignore")
 
+
 def runRadex(species, widths, temperatures, densities, columns, **kwargs):
     """Calls pyradex iteratively to produce a table of intensities."""
 
     # Make sure all the provided values are iterable.
-    
+
     temperatures, tnum, tmin, tmax = formatInput(temperatures, log=False)
     densities, dnum, dmin, dmax = formatInput(densities, log=True)
     columns, cnum, cmin, cmax = formatInput(columns, log=True)
     widths, wnum, wmin, wmax = formatInput(widths, log=False)
-    
+
     # Check that the collisional rate file exists.
     # This is hardwired to where the collisional rates are.
-    
+
     rates_path = os.getenv('RADEX_DATAPATH')
     if not os.path.isfile('{}{}.dat'.format(rates_path, species)):
         raise ValueError('Not found collisional rates.')
     rates = lamdaclass.ratefile('{}{}.dat'.format(rates_path, species))
-        
+
     # We assume that the density is n(H2) and the ortho/para ratio is 3.
     # Check if oH2 and pH2 are valid colliders in the collisional rate file.
     # If they are, recalculate the densities.
-    
+
     opr = kwargs.get('opr', 3.)
     if ('oH2' in rates.partners and 'pH2' in rates.partners):
         opr_flag = True
         print 'Assuming an ortho / para ratio of {}.'.format(opr)
     else:
         opr_flag = False
-    
+
     # Dummy array to hold the results.
     # Hold up the 'jmax' transition, default is 10.
     # Saves both the brightness temperature and optical depth.
 
     jmax = kwargs.get('jmax', 9) + 1
-    Tb = np.zeros((jmax, 2, wnum, tnum, dnum, cnum))    
+    Tb = np.zeros((jmax, 2, wnum, tnum, dnum, cnum))
 
     # First initialise pyradex, then iterate through all the permutations.
 
@@ -81,20 +82,20 @@ def runRadex(species, widths, temperatures, densities, columns, **kwargs):
 
     print 'Generated table in {}.'.format(seconds2hms(t1-t0))
 
-    # Use the filename convention, 
+    # Use the filename convention,
     #       species_widths_temperatures_densities_columns.npy
     # where each variable contains the three values,
     #       minval_maxval_nvals,
-    # with number in the '%.2f' format. This will help with reading 
+    # with number in the '%.2f' format. This will help with reading
     # in the file.
-    
+
     fn = '{}_'.format(species)
     fn += '{:.2f}_{:.2f}_{:d}_'.format(wmin, wmax, wnum)
     fn += '{:.2f}_{:.2f}_{:d}_'.format(tmin, tmax, tnum)
     fn += '{:.2f}_{:.2f}_{:d}_'.format(dmin, dmax, dnum)
     fn += '{:.2f}_{:.2f}_{:d}.npy'.format(cmin, cmax, cnum)
     np.save(kwargs.get('path', './') + fn, Tb)
-    
+
     return
 
 
@@ -113,6 +114,7 @@ def formatInput(arr, log=True):
         amax = np.log10(amax)
     return arr, anum, amin, amax
 
+
 def densityDict(density, opr, opr_flag):
     """Return a dictionary of the densities"""
     if opr_flag:
@@ -120,7 +122,8 @@ def densityDict(density, opr, opr_flag):
                 'pH2': density * 1. / (opr + 1.)}
     else:
         return {'H2': density}
-       
+
+
 def seconds2hms(seconds):
     """Convert seconds to hours, minutes, seconds."""
     m, s = divmod(seconds, 60)
@@ -136,4 +139,3 @@ if __name__ == '__main__':
     densities = np.logspace(vals[6], vals[7], vals[8])
     columns = np.logspace(vals[9], vals[10], vals[11])
     runRadex(species, widths, temperatures, densities, columns)
-
